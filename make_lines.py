@@ -34,7 +34,7 @@ def generate(res=224, thickness=2, lineType=cv2.LINE_AA, rng=None):
     cv2.line(image, (xs[i], y2s[i]), [xs[i+1], y2s[i+1]], color=(0, 0, 255, 255), thickness=thickness, lineType=lineType)
     n += (y1s[i] - y2s[i]) * (y1s[i+1] - y2s[i+1]) < 0
 
-  return image, n
+  return image, int(n)
 
 import json
 import os
@@ -52,7 +52,7 @@ with open('lines_data/val.jsonl', 'w+') as f:
     if (n := class_counts[c]) < 333:
       fname = f'val_{c}_{n:03d}.png'
       cv2.imwrite('lines_data/' + fname, img)
-      f.write(json.dumps({'suffix': str(c), 'image': fname}) + "\n")
+      f.write(json.dumps({'label': c, 'image': fname}) + "\n")
       class_counts[c] += 1
     print(f"\r{class_counts}", end="", flush=True)
 
@@ -62,4 +62,4 @@ with open('lines_data/train.jsonl', 'w+') as f:
   for fname in (f'train_{i:05d}.png' for i in tqdm(range(10_000))):
     img, c = generate(rng=rng)
     cv2.imwrite('lines_data/' + fname, img)
-    f.write(json.dumps({'suffix': str(c), 'image': fname}) + "\n")
+    f.write(json.dumps({'label': c, 'image': fname}) + "\n")
