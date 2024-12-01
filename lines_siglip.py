@@ -28,7 +28,7 @@ def training_data():
     # Even though the images are already 224, we'll still reshape them
     # in order to give the variable a static shape.
     'decode|resize(224)|value_range(-1, 1)',
-    'onehot(3, key="{label}", key_result="labels")',
+    'onehot(3, key="label", key_result="labels")',
     'keep("image", "labels")',
   ])
   # Keep the whole dataset in RAM after first pass. Useful optimization for
@@ -50,14 +50,15 @@ def get_config():
   c.input.batch_size = 32
   c.optax_name = 'big_vision.scale_by_adafactor'
   c.lr = 1e-5
-  c.wd = 3e-7
+  c.schedule = dict(decay_type='cosine', warmup_percent=0.1)
   c.grad_clip_norm = 1.0
   c.loss = 'softmax_xent'
 
   # Model section.
   c.model_name = 'vit'
   c.model = dict(variant='So400m/14', pool_type='map', head_zeroinit=True, scan=True)
-  c.model_init = 'SigLIP So400m/14 224'
+  c.model_init = '/workspace/webli_en_so400m_224_57633886.npz:img'
+  c.model_load = dict(dont_load=['head/kernel', 'head/bias'])
 
   # FSDP strategy.
   c.mesh = [('data', -1)]
