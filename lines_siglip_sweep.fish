@@ -1,6 +1,7 @@
 #!/usr/bin/env fish
 
-# Run this while in the big_vision folder while the venv is active.
+# Either run this file in the big_vision folder with the venv active,
+# or let's just hard-code this right here to avoid annoying mistakes:
 cd /home/big_vision
 . ../venv/bin/activate.fish
 

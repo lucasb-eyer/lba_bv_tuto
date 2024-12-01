@@ -43,9 +43,9 @@ def get_config():
   c = bvcc.parse_arg('')  # Just make a configdict without extra import.
   c.input = training_data()
   c.num_classes = 3
+  c.log_training_steps = 2  # Short, so log frequently!
 
   # Instead of epochs, you can also use `total_examples` or `total_steps`.
-  c.log_training_steps = 1
   c.total_epochs = 15
   c.input.batch_size = 32
   c.optax_name = 'big_vision.scale_by_adafactor'
@@ -57,7 +57,14 @@ def get_config():
   # Model section.
   c.model_name = 'vit'
   c.model = dict(variant='So400m/14', pool_type='map', head_zeroinit=True, scan=True)
+  # Our model is a plain ViT, but the SigLIP checkpoints contain both a ViT
+  # and a text encoder in subkeys as {"img": THE_VIT, "txt": THE_TXT_ENC}.
+  # Here the special syntax `:img` allows us to load only the "img" sub-tree:
   c.model_init = '/workspace/webli_en_so400m_224_57633886.npz:img'
+  # When a checkpoint is loaded, big_vision complains if any param in the checkpoint
+  # was not used, or if any param in the model was not loaded.
+  # Here, we do want the fresh zero-init'ed head params, so we need to =
+  # explicitly tell big_vision to not load them:
   c.model_load = dict(dont_load=['head/kernel', 'head/bias'])
 
   # FSDP strategy.
