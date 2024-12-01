@@ -1,4 +1,5 @@
 # pylint: disable=line-too-long
+# -*- mode: python; tab-width: 2; indent-tabs-mode: nil -*- vim: set tabstop=2 shiftwidth=2 expandtab:
 r"""Finetunine PaliGemma on the line intersection JSON-L dataset.
 
 Command to run this config:
@@ -18,20 +19,21 @@ def training_data():
   """Creates training data config."""
   c = bvcc.parse_arg('')  # Just make a configdict without extra import.
   c.data = dict(
-      name='bv:jsonl',
-      fname='/workspace/lines_data/train.jsonl',
-      fopen_keys={'image': '/workspace/lines_data/'},
-      # See docstring in datasets/jsonl.py for further details.
-      # download_keys=['image'],  # If jsonl contains external paths.
-      # start=0,
-      stop=float("inf"),  # Define an end here, so we can override it.
+    name='bv:jsonl',
+    fname='/workspace/lines_data/train.jsonl',
+    # The strings in the `image` key of the JSON-L are files in that folder:
+    fopen_keys={'image': '/workspace/lines_data/'},
+    # Or they could be URLs to download:
+    # download_keys=['image'],
+    stop=128,  # Only use 128 examples. float("inf") for all.
   )
   c.pp = '|'.join([
-      # Even though the images are already 224, we'll still reshape them
-      # in order to give the variable a static shape.
-      'decode|resize(224)|value_range(-1, 1)',
-      'strfmt("count", outkey="prefix")',  # `suffix` is in the data.
-      combine_and_keep_train(text_len=8),
+    # Even though the images are already 224, we'll still reshape them
+    # in order to give the variable a static shape.
+    'decode|resize(224)|value_range(-1, 1)',
+    'strfmt("count", outkey="prefix")',  # Store string "count" in `prefix`
+    'strfmt("{label}", outkey="suffix")',  # Format label as string in `suffix`
+    combine_and_keep_train(text_len=8),  # Combine prefix+suffix to 8 toks.
   ])
   # Keep the whole dataset in RAM after first pass. Useful optimization for
   # small/mid-size datasets, but risks a host OOM for large datasets.
@@ -41,73 +43,66 @@ def training_data():
 
 def add_eval_pplx(c):
   """Perplexity evaluator to test runs before implementing the real deal."""
-  c_data = training_data()  # Use mostly same settings as training.
-  c_data.pp = '|'.join([
-      'decode|resize(224)|value_range(-1, 1)',
-      'strfmt("count", outkey="prefix")',  # `suffix` is in the data.
-      combine_and_keep_eval(text_len=8),
-  ])
-
   c.evals['val/pplx'] = dict(
-      type='proj.paligemma.perplexity', pred='logits',
-      key='text', shift_labels=True,
-      log_percent=1/10,
-      data={
-          **c_data.data,
-          'fname': '/workspace/lines_data/val.jsonl',
-      },
-      pp_fn=c_data.pp
+    type='proj.paligemma.perplexity', pred='logits',
+    key='text', shift_labels=True,
+    log_percent=1/10,
+    data=dict(
+      name='bv:jsonl',
+      fname='/workspace/lines_data/val.jsonl',
+      fopen_keys={'image': '/workspace/lines_data/'},
+    ),
+    pp_fn='|'.join([
+      'decode|resize(224)|value_range(-1, 1)',
+      'strfmt("count", outkey="prefix")',
+      'strfmt("{label}", outkey="suffix")',
+      combine_and_keep_eval(text_len=8),
+    ]),
   )
 
 
 def add_eval_store(c):
   """Evaluator to store predictions to a file."""
-  c_data = training_data()  # Use mostly same settings as training.
-  c_data.pp = '|'.join([
+  c.evals['val/store'] = dict(
+    type='proj.paligemma.transfers.storepreds',
+    pred='decode', pred_kw={'max_decode_len': 8},
+    log_percent=1, skip_first=True, tokenizer=TOKENIZER,
+    data=dict(
+      name='bv:jsonl',
+      fname='/workspace/lines_data/val.jsonl',
+      fopen_keys={'image': '/workspace/lines_data/'},
+    ),
+    pp_fn='|'.join([
       'decode|resize(224)|value_range(-1, 1)',
       'strfmt("count", outkey="prefix")',
-      'drop("suffix")',  # If we keep a `suffix` here, it is used as a prompt for decoding.
+      # Here, we don't want a `suffix`, as that would be used as a "prefill"
+      # for decoding the answer.
       combine_and_keep_eval(text_len=8, keep=('id',)),
-  ])
-
-  c.evals['val/store'] = dict(
-      type='proj.paligemma.transfers.storepreds',
-      pred='decode', pred_kw={'max_decode_len': 8},
-      log_percent=0.5, tokenizer=TOKENIZER,
-      data={
-          **c_data.data,
-          'fname': '/workspace/lines_data/val.jsonl',
-      },
-      pp_fn=c_data.pp,
+    ]),
   )
 
 
 def add_eval_acc(c, **kw):
   """Add eval configs."""
-  pp_eval = '|'.join([
+  c.evals['eval/acc'] = dict(
+    type='proj.paligemma.transfers.vqa',
+    pred='decode', pred_kw={'max_decode_len': 8},
+    outfile='{workdir}/vqa_eval_{step}.json',
+    data=dict(
+      name='bv:jsonl',
+      fname='/workspace/lines_data/val.jsonl',
+      fopen_keys={'image': '/workspace/lines_data/'},
+    ),
+    log_percent=1/8, skip_first=True, tokenizer=TOKENIZER,
+    pp_fn='|'.join([
       'decode|resize(224)|value_range(-1, 1)',
-      'copy(inkey="id", outkey="question_id")',  # Required by evaluator.
-      'copy(inkey="suffix", outkey="answer")',  # Required by evaluator.
-      'drop("suffix")',  # If we keep a `suffix` here, it is used as a prompt for decoding.
       'strfmt("count", outkey="prefix")',
+      'strfmt("{label}", outkey="answer")',  # GT evaluator compares to.
+      'copy(inkey="id", outkey="question_id")',  # Required by evaluator.
       combine_and_keep_eval(text_len=8, keep=('answer', 'question_id')),
-  ])
-
-  for freq, name, split in [
-      (1/8, 'eval', 'val'),
-      # (1.0, 'test', 'test'),
-  ]:
-    c.evals[f'{name}/acc'] = dict(
-        type='proj.paligemma.transfers.vqa',
-        pred='decode', pred_kw={'max_decode_len': 8},
-        outfile=f'{{workdir}}/vqa_{name}_{{step}}.json',
-        data={
-            **training_data().data,
-            'fname': f'/workspace/lines_data/{split}.jsonl',
-        },
-        pp_fn=pp_eval,
-        log_percent=freq, skip_first=freq == 1, tokenizer=TOKENIZER)
-    c.evals[f'{name}/acc'].update(kw)
+    ])
+  )
+  c.evals['eval/acc'].update(kw)
 
 
 def get_config(arg=None):
@@ -135,17 +130,12 @@ def get_config(arg=None):
       ('llm/.*', None if c.freeze_llm else sched),
   ]
 
-  c.evals = {}
-  add_eval_pplx(c)
-  # add_eval_store(c)
-  add_eval_acc(c)
-
   # Model section.
   c.model_name = 'proj.paligemma.paligemma'
   c.model = {}
   c.model.img = dict(variant='So400m/14', pool_type='none', scan=True)
   c.model.llm = dict(vocab_size=256_000 + 1024 + 128, dropout=0.0)
-  c.model_init = f'pt_224'
+  c.model_init = 'pt_224'
 
   # FSDP strategy.
   c.mesh = [('data', -1)]
@@ -155,6 +145,11 @@ def get_config(arg=None):
   c.input.shuffle_buffer_size = 1000
   c.log_training_steps = 1
   c.pp_modules = ['ops_general', 'ops_image', 'ops_text', 'proj.paligemma.ops']
+
+  c.evals = {}
+  add_eval_pplx(c)
+  # add_eval_store(c)
+  add_eval_acc(c)
 
   c.seed = 0
 
