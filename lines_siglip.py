@@ -12,7 +12,20 @@ python -m big_vision.train \
 import big_vision.configs.common as bvcc
 
 
-def training_data():
+def register_new_pp_ops():
+  from big_vision.pp import utils
+  from big_vision.pp.registry import Registry
+  import tensorflow as tf
+
+  @Registry.register("preprocess_ops.flip_ud")
+  @utils.InKeyOutKey()
+  def get_random_flip_ud():
+    def _random_flip_ud_pp(image):
+      return tf.image.random_flip_up_down(image)
+    return _random_flip_ud_pp
+
+
+def training_data(flip=True, crop=True):
   """Creates training data config."""
   c = bvcc.parse_arg('')  # Just make a configdict without extra import.
   c.data = dict(
@@ -28,6 +41,9 @@ def training_data():
     # Even though the images are already 224, we'll still reshape them
     # in order to give the variable a static shape.
     'decode|resize(224)|value_range(-1, 1)',
+    'flip_lr|flip_ud' if flip else '',
+    'pad_to_shape(shape=(256, 256, 3), pad_value=1, where="both")' if crop else '',
+    'random_crop(224)' if crop else '',
     'onehot(3, key="label", key_result="labels")',
     'keep("image", "labels")',
   ])
@@ -38,10 +54,11 @@ def training_data():
   return c
 
 
-def get_config():
+def get_config(arg=None):
   """Config for training."""
-  c = bvcc.parse_arg('')  # Just make a configdict without extra import.
-  c.input = training_data()
+  register_new_pp_ops()
+  c = bvcc.parse_arg(arg, flip=True, crop=True)
+  c.input = training_data(c.flip, c.crop)
   c.num_classes = 3
   c.log_training_steps = 2  # Short, so log frequently!
 
@@ -82,7 +99,26 @@ def get_config():
       fopen_keys={'image': '/workspace/lines_data/'},
     ),
     log_percent=1/8, skip_first=True, cache='final_data',
-    pp_fn=c.input.pp,  # eval and train pp are same here.
+    pp_fn='|'.join([
+      'decode|resize(224)|value_range(-1, 1)',
+      'onehot(3, key="label", key_result="labels")',
+      'keep("image", "labels")',
+    ])
+  )
+  c.evals['test/acc'] = dict(
+    type='classification',
+    loss_name='softmax_xent',
+    data=dict(
+      name='bv:jsonl',
+      fname='/workspace/lines_data/test.jsonl',
+      fopen_keys={'image': '/workspace/lines_data/'},
+    ),
+    log_percent=1, skip_first=True, cache='final_data',
+    pp_fn='|'.join([
+      'decode|resize(224)|value_range(-1, 1)',
+      'onehot(3, key="label", key_result="labels")',
+      'keep("image", "labels")',
+    ])
   )
   # TODO: Maybe attach fewshot linear probe evaluator just to show?
 
